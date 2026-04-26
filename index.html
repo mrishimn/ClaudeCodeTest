@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>numgsr</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<nav class="topbar" aria-label="primary">
+  <button class="wordmark" type="button" id="wordmarkBtn">Numgsr</button>
+  <a class="nav-link" href="#">number</a>
+  <a class="nav-link muted" href="#">streak<span class="badge">new</span></a>
+</nav>
+
+<main>
+  <section class="card" id="card" aria-live="polite">
+    <svg class="corner-mark" id="cornerMark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M12 2v4M12 18v4M2 12h4M18 12h4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M4.9 19.1l2.8-2.8M16.3 7.7l2.8-2.8"/>
+    </svg>
+
+    <div class="start-screen" id="startScreen">
+      <h1 class="headline">pick your poison</h1>
+      <p class="body">how much pain do you want?</p>
+
+      <div class="timer-slider" id="timerSlider">
+        <span class="timer-label">timer</span>
+        <div class="timer-track-wrap">
+          <div class="timer-tick-labels">
+            <span class="timer-tick-label active" data-index="0">off</span>
+            <span class="timer-tick-label" data-index="1">15</span>
+            <span class="timer-tick-label" data-index="2">30</span>
+            <span class="timer-tick-label" data-index="3">45</span>
+            <span class="timer-tick-label" data-index="4">60</span>
+            <span class="timer-tick-label" data-index="5">90</span>
+          </div>
+          <div class="timer-track" id="timerTrack">
+            <span class="timer-tick" data-index="0"></span>
+            <span class="timer-tick" data-index="1"></span>
+            <span class="timer-tick" data-index="2"></span>
+            <span class="timer-tick" data-index="3"></span>
+            <span class="timer-tick" data-index="4"></span>
+            <span class="timer-tick" data-index="5"></span>
+            <button class="timer-handle" id="timerHandle" type="button" aria-label="timer duration"></button>
+          </div>
+        </div>
+      </div>
+
+      <div class="difficulty-switch" id="difficultySwitch">
+        <span class="difficulty-slot" data-index="0"></span>
+        <span class="difficulty-slot" data-index="1"></span>
+        <span class="difficulty-slot" data-index="2"></span>
+        <span class="difficulty-slot" data-index="3"></span>
+        <button class="difficulty-handle" id="difficultyHandle" type="button" aria-label="difficulty"></button>
+      </div>
+      <div class="difficulty-label" id="difficultyLabel">easy</div>
+      <span class="best-single" id="bestSingle">best: —</span>
+
+      <button type="button" class="go-btn" id="goBtn">go</button>
+    </div>
+
+    <div class="game-screen" id="gameScreen" hidden>
+      <div class="timer-display" id="timerDisplay" hidden>0:00</div>
+
+      <h1 class="headline" id="headline">number</h1>
+
+      <div class="body" id="intro">
+        <p id="introRange">i'm thinking of a number between 1 and 1000.</p>
+        <p>you have unlimited tries but your dignity is finite.</p>
+      </div>
+
+      <ul class="history" id="history" hidden></ul>
+
+      <p class="new-best" id="newBest" hidden>new best</p>
+
+      <p class="win-subtext" id="winSubtext" hidden></p>
+      <p class="time-spare" id="timeSpare" hidden></p>
+
+      <p class="prompt" id="prompt">your guess?</p>
+
+      <form class="controls" id="form" autocomplete="off" novalidate>
+        <div class="input-pill">
+          <input id="guess" type="text" inputmode="numeric" placeholder="1–1000" autofocus aria-label="your guess">
+        </div>
+        <button type="submit" class="action-btn" id="submitBtn" aria-label="submit guess">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M5 12h14M13 6l6 6-6 6"/>
+          </svg>
+        </button>
+        <button type="button" class="icon-btn" id="resetBtn" aria-label="new game" hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M3 12a9 9 0 1 0 3.5-7.1M3 3v5h5"/>
+          </svg>
+        </button>
+      </form>
+
+      <button type="button" class="action-btn play-again" id="playAgainBtn" aria-label="play again" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M3 12a9 9 0 1 0 3.5-7.1M3 3v5h5"/>
+        </svg>
+      </button>
+
+      <div class="error" id="error" role="status" aria-live="polite"></div>
+
+      <div class="range-bar-wrap">
+        <div class="range-label-row range-label-row-top">
+          <span class="range-label-lower" id="rangeLabelLower">1</span>
+        </div>
+        <div class="range-bar" id="rangeBar">
+          <div class="range-alive" id="rangeAlive"></div>
+          <div class="range-ticks" id="rangeTicks"></div>
+        </div>
+        <div class="range-label-row range-label-row-bottom">
+          <span class="range-label-upper" id="rangeLabelUpper">1000</span>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer class="bottom-bar">
+  <div class="utility-links" id="utilityLinks">
+    <span>v1.0</span>
+    <span class="dot">·</span>
+    <a href="#">privacy</a>
+    <span class="dot">·</span>
+    <a href="#">scoring</a>
+    <span class="dot">·</span>
+    <button class="link-btn" type="button" id="resetScoresBtn">reset scores</button>
+  </div>
+  <div class="reset-confirm" id="resetConfirm" hidden>
+    <span>erase all best scores?</span>
+    <button class="link-btn" type="button" id="confirmYes">yes</button>
+    <span class="dot">/</span>
+    <button class="link-btn" type="button" id="confirmNo">no</button>
+  </div>
+  <button class="theme-toggle" type="button" aria-label="sound">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M11 5 6 9H2v6h4l5 4V5z"/>
+      <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/>
+    </svg>
+  </button>
+</footer>
+
+<script src="script.js" defer></script>
+</body>
+</html>
