@@ -1,94 +1,133 @@
-# CLAUDE.md
+# ClaudeCodeTest — Number Guessing Game
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+## What this is
 
-## Repository purpose
+A single-page web game where the player guesses a randomly chosen number. Visual style modeled directly on dialed.gg — a minimal dark "hero card" floating on a white page, with a thin top nav and utility footer. Built as a learning project; the user is a beginner who values clean, organized, well-commented code.
 
-A sandbox folder (not its own git repo — the outer repo lives at `~/Documents/mrishicode/.git`) holding two small web experiments. No build tooling, no `package.json`, no framework, no dependencies beyond Google Fonts. Do not introduce any.
+Repo: https://github.com/mrishimn/ClaudeCodeTest
 
-The two experiments:
-- **Root-level Numgsr** — a dialed.gg-styled number-guessing game with difficulty picker, best-score tracking, and hot/cold visual feedback. Lives at `index.html` + `styles.css` + `script.js`, with `original-backup.html` kept as a diffable reference to the single-file version this was refactored from.
-- **`NumGSR/` subproject** — an older, minimalist variant of a similar game, with its own nested `.git/`. Not active development.
+No build tooling, no `package.json`, no framework, no dependencies beyond Google Fonts (Inter). Do not introduce any.
 
-## The two apps have different aesthetics — do not cross them
+## Design rules — DO NOT BREAK
 
-- **Root-level Numgsr**: dialed.gg style. White page, thin top nav, dark rounded card (neutral `#1a1a1a`, shifts hot/cold on guess), `box-shadow`, conic-gradient rainbow border on the action button, white pill input, utility footer. Cards, shadows, and gradients are deliberate here.
-- **`NumGSR/` subproject**: flat minimalist. No cards, no shadows, no gradients. `#16a34a` green accent only on win. Preserve this restraint when editing — no "modern SaaS" styling.
+- **dialed.gg aesthetic.** White page (`#fafafa`), dark rounded card centered, thin top nav, utility footer. Card has `box-shadow` and a conic-gradient ring on the "go" button — these are deliberate.
+- **All text lowercase.** Including headings, buttons, labels, placeholders.
+- **Dry, deadpan copy voice.** No emoji. No exclamation points. Examples: `"pick your poison"`, `"how much pain do you want?"`, `"your guess?"`, `"got it"`, `"time's up"`, `"1 to 1000. those are the rules."`, `"you have unlimited tries but your dignity is finite."`
+- **One sans-serif font** — Inter (loaded from Google Fonts), system-ui fallback.
+- **Hard, structural elements**: dark card with rounded corners, white pill controls, gradient ring on the "go" button.
+- **Hot/cold color shifts** during gameplay use a defined palette of dark tints (red → orange → neutral → blue), never bright/saturated. Thresholds live in `getCardColor()` and `getAccentTint()` in `script.js` — edit them there, not in CSS.
+- **All shake animations are TRANSLATION ONLY, no rotation.** Don't add rotation back.
+- **`.prompt` and `.error` deliberately stay on `--prompt-on-dark` / `--error-on-dark` rgba-white** so interactive text stays crisp across all card colors. Do not fold them into `--accent-tint`.
 
-Shared by both: `#fafafa` page background, Inter font, lowercase copy, no emoji or exclamation points.
+## File structure
 
-## Nested git repo gotcha
+```
+ClaudeCodeTest/
+├── index.html             — page structure, links to styles.css and script.js
+├── styles.css             — all visual styling (single file)
+├── script.js              — game logic + DOM event listeners (single file, ~700 lines)
+├── CLAUDE.md              — this file
+├── .gitignore             — excludes .DS_Store, IDE folders, original-backup.html, etc.
+├── .claude/               — Claude Code per-project settings (committed)
+└── original-backup.html   — pre-refactor single-file version (gitignored, kept locally for diffing)
+```
 
-`NumGSR/` has its own `.git/` — a nested repo, not a submodule. `git status` / `git log` from outside won't see changes inside it; `cd NumGSR/` first. The outer repo at `~/Documents/mrishicode/.git` tracks `NumGSR/` as an opaque embedded directory. This `ClaudeCodeTest/` folder has no `.git/` of its own.
+No `helpers.js` — script.js stayed below the threshold where splitting helped readability.
 
-## Main app architecture (root-level Numgsr)
+`script.js` is organized top-to-bottom for beginner readability: constants → state → DOM refs → helpers → main game functions → switch/timer handlers → event listeners → init.
 
-Three files coupled by DOM `id`. `script.js` is a classic script tag loaded with `defer`, organized top-to-bottom for beginner readability: constants → state → DOM refs → helpers → main functions → event listeners.
+## Features built and how they work
 
-### Screens
+### Start screen
 
-The dark card holds two mutually exclusive screens toggled via the `hidden` attribute:
-- `#startScreen` — difficulty picker. Shown on load and after every win.
-- `#gameScreen` — input, feedback, history.
+- **Headline** `"pick your poison"`, **subtext** `"how much pain do you want?"`.
+- **Timer slider** — six positions (`off`, `15`, `30`, `45`, `60`, `90`). Click ticks/labels or drag the white handle. Active label opacity 1.0, inactive 0.3 (200 ms transition). Value persists across rounds in the session via `sessionStorage` (key `numgsrSwitchDifficulty` for the difficulty, separate from this — slider state is not persisted across full reloads).
+- **Difficulty switch** — compact pill (135 × 36 px, 20 px radius, 1.5 px white border) with four positions: `easy` (1–100), `medium` (1–500), `hard` (1–1000), `brutal` (1–2000). All four small dots (5 px, 50% white) always visible; large white circle (17 px) slides over the current position with a 150 ms ease. **Click anywhere on the switch cycles forward** (brutal wraps to easy). Keyboard `ArrowRight` cycles forward, `ArrowLeft` cycles backward, both wrap. The handle button is `pointer-events: none` so clicks fall through to the switch container — handler is on the outer pill.
+- **Difficulty label** below the switch — `"easy"` / `"medium"` / `"hard"` / `"brutal"`, color tracks `--accent-tint`.
+- **`best: N` line** under the label, crossfades on slider or switch change (150 ms out, 150 ms in via a `.fading` class).
+- **`go` button** — circular, white fill, dark text. Conic-gradient rainbow ring around it (always visible, rotates on hover via animated `--angle` registered with `@property`). Centered at the bottom of the card. Always enabled. The whole button has `position: relative` with a `::before` mask-ringed pseudo-element for the rainbow.
+- **Card background fades to the difficulty palette** when the switch level changes:
+  - `easy` → bg `#1e3a5f`, tint `#8ba3c4`
+  - `medium` → bg `#2e3a48`, tint `#9ba3b0`
+  - `hard` → bg `#5a3828`, tint `#b89888`
+  - `brutal` → bg `#8a3020`, tint `#d49888`
+  - 600 ms ease via two CSS variables (`--card-bg`, `--accent-tint`) on the `.card`.
 
-`showStartScreen()` and `startGame(difficulty)` do the swap; both also reset all in-card state.
+### Difficulty change effects (start-screen "switch flick" feedback)
 
-### Difficulty
+Three effects fire simultaneously every time the switch level changes, driven by a single `data-effect="{level}"` attribute on the card:
 
-`DIFFICULTIES` at the top of `script.js` defines four levels: easy 1–100, medium 1–500, hard 1–1000, brutal 1–2000. `rangeMax` holds the active round's ceiling; `parse()`, the error copy (`"1 to {rangeMax}. those are the rules."`), the intro text, and the input placeholder all read it. On difficulty pick, `target` is rolled in `[1, rangeMax]`.
+- **Translation-only shake**, intensity scales with destination level:
+  - easy: ±2 px / 200 ms
+  - medium: ±5 px / 300 ms
+  - hard: ±9 px / 400 ms
+  - brutal: ±14 px / 500 ms
+- **Red+cyan chromatic aberration text-shadow** on every text child of the card (`h1, h2, p, span, label, button, input, li`), scales similarly (±1 px through ±4 px, opacity 0.85, fades out at the end via `chromatic-fade` keyframe).
+- **Motion blur** (1 px on hard, 2 px on brutal, peaks at 40% of animation, no blur on easy/medium).
+
+Cleanup: `fireShakeEffect()` uses a monotonic `effectToken` — a newer effect cancels stale `setTimeout` cleanup so rapid clicks don't leave the attribute stuck on.
+
+### Game screen
+
+- **Headline** is the directional cue: `"number"` initially, then `"higher"` / `"lower"`, ends as `"got it"` (or `"time's up"`).
+- **Intro paragraph** `"i'm thinking of a number between 1 and {rangeMax}."` + `"you have unlimited tries but your dignity is finite."` — hidden after the first guess.
+- **Input** — white pill, autofocus, `inputmode="numeric"`, Enter submits via the form. Validation: `parse()` requires `^\d+$`, then range-check 1–rangeMax. Failure shows inline error: `"1 to {rangeMax}. those are the rules."` (no `alert`, no `confirm`).
+- **Guess history list**, newest on top, last 5 guesses, format `"N — higher/lower"`.
+- **Range-narrowing bar** — thin horizontal bar (5 px tall, 85% card width). Alive zone (`rgba(255,255,255,0.8)`-ish using `var(--accent-tint)`) shrinks as bounds tighten with a 400 ms ease. White ticks left at every past guess position. **lowerBound label above the bar, right-edge anchored to the left tick** (number extends leftward, away from alive zone). **upperBound label below the bar, left-edge anchored to the right tick** (extends rightward). Bounds are set to the guess value itself (`lowerBound = max(lowerBound, guess)`, `upperBound = min(upperBound, guess)`) — no `+1` / `-1` — so the labels read the exact number the player typed.
+- **Hot/cold card color shift** on every guess: `coldness = abs(guess - target) / rangeMax`. Both `--card-bg` and `--accent-tint` update via a single `setCardColors(bg, tint)` call. The `.card` transitions `background-color` over 600 ms; muted text descendants transition `color` over 600 ms. Same mechanism the difficulty palette uses.
+- **Wrong-guess shake** — translation-only ~±8 px / 400 ms via `applyShake()` (remove class, force reflow with `void card.offsetWidth`, re-add — required to re-trigger a CSS animation that may still be running). Subtle red+cyan chromatic aberration accompanies it (±1.5 px, opacity 0.4) via `.card.shake :is(...)`. Correct guesses do not shake — silence is the reward.
+- **Correct guess (win state)** — card fades to deep green `#1a3d2a` with `--accent-tint` `#a6c7ad`. Headline becomes `"got it"`. Win subtext: `"the number was N. solved in M tries."` (singular `"try."` if 1). If a record was beaten, a muted `"new best"` line appears above the subtext. Play-again button (rainbow icon) replaces the form.
+
+### Timer mode
+
+- **Countdown display** in the top-right corner of the card while playing if the slider is on. Format `"m:ss"` (no leading zero on minutes). Replaces the decorative corner-mark SVG; the SVG comes back when the timer is off.
+- **Pauses during shake.** When `applyShake()` fires, `pauseTimer()` is called too. The `card.addEventListener('animationend', ...)` listener fires `resumeTimer()` when the shake finishes. Pause math uses `performance.now()` plus a `timerPausedMs` accumulator; safe across multiple rapid wrong guesses.
+- **Timeout state** — card fades to defeat color `#1f2530` with tint `#7a8294`. Headline becomes `"time's up"`. Reveals the answer: `"the number was N. you got to {lastGuess}."` or `"the number was N. you didn't guess."` if no guesses. Range bar stays visible so the player can see how close they got.
+- **Win with time remaining** shows a muted second line: `"K seconds to spare."` (singular `"second"` if 1). Computed via `Math.floor(remainingMs / 1000)` *before* `stopTimer()` is called.
 
 ### Best-score tracking
 
-Persisted in `localStorage` under key `guessGameBestScores` as `{easy, medium, hard, brutal}` (each `null` or a guess count). `win()` compares `guesses.length` to the stored value; if `null` OR beaten, updates the record and reveals `#newBest`. The footer `reset scores` link swaps in an inline yes/no confirm — no `window.confirm`.
+- **localStorage key** `guessGameBestScores`.
+- **Nested shape**: `{ easy: { untimed, "15", "30", "45", "60", "90" }, medium: {...}, hard: {...}, brutal: {...} }` — 24 total slots (4 difficulties × 6 timer settings).
+- **Migration**: `loadBestScores()` detects the old flat shape (values are `null | number` instead of objects), converts each value into the corresponding `untimed` slot, persists the new shape, and deletes the old. Silent — no user notification.
+- **Reset scores link** in the footer with an inline `"erase all best scores? yes / no"` confirm (no `window.confirm`). Wipes all 24 slots.
+- **Display** — single `"best: N"` line under the difficulty switch on the start screen, reflects current `(switch-level, slider-position)` combo.
 
-### Hot/cold feedback
+### Back navigation (from game screen)
 
-On each wrong guess: `coldness = Math.abs(guess - target) / rangeMax` (0 = burning close, 1 = far). Two CSS variables on `.card` are set via `card.style.setProperty`:
-- `--card-bg` drives `background-color` with a 600 ms transition.
-- `--accent-tint` drives the color of body-style muted text (`.body`, `.history li`, `.win-subtext`, `.new-best`, `.best-label`) with the same 600 ms transition.
+Two ways to return to start screen mid-round (the in-card "back" text link was removed at user request — only these two remain):
 
-Thresholds live in `getCardColor()` (7 steps) and `getAccentTint()` (6 steps) in `script.js`. Edit them there, not in CSS. On win the card swaps to warm gold (`#2a2416` / `#b8a688`); on new round or difficulty pick it resets to neutral (`#1a1a1a` / `#888888`).
+1. **Click the wordmark** in the top nav (`<button class="wordmark" id="wordmarkBtn">`). Always clickable.
+2. **Press Escape**. Active only during play — the keydown listener checks `!gameScreen.hidden && !form.hidden` so Escape no-ops on the start screen and on win/timeout screens (the form is hidden on those screens).
 
-`.prompt` and `.error` intentionally stay on `--prompt-on-dark` / `--error-on-dark` rgba-white so interactive text stays crisp across all card colors — do not fold them into `--accent-tint`.
+Both call `goToStartScreen()`, which stops the timer, resets `currentDifficulty` from session, resets all in-card state (history, target, range bar, card color), and shows the start screen with the difficulty palette restored.
 
-### Shake
+## Decisions discussed but NOT built
 
-`.card.shake` fires a 400 ms translate-and-rotate keyframe on wrong guesses only. `applyShake()` removes the class, forces a reflow (`void card.offsetWidth`), and re-adds — required to re-trigger a CSS animation that might still be running. An `animationend` listener on the card also removes the class for cleanup. Correct guesses never shake; silence is the reward.
+- ~~Visual range-narrowing bar~~ — built.
+- ~~Range labels split above/below bar with edge anchoring~~ — built.
+- ~~Switch-style difficulty selector~~ — built.
+- ~~Chromatic aberration on level change~~ — built.
+- Daily challenge mode — discussed, not built.
+- Multiplayer / shareable game links — discussed, not built.
+- Sound effects — discussed, not built.
+- Achievement system — discussed, not built.
+- Hint system — discussed, not built.
+- Reverse mode (computer guesses your number) — discussed, not built.
+- Streak mode — discussed, not built.
+- Light / dark theme variants — discussed, not built.
 
-### Reset model
+## Working style notes for future Claude sessions
 
-Both the mid-game reset icon (`#resetBtn`) and the post-win play-again button (`#playAgainBtn`) call `showStartScreen()`. "Abort = pick again" is the single mental model — there is no "restart same difficulty" shortcut by design.
+- **User is a beginner.** Add short plain-English comments above functions. Don't write long docstrings — one or two lines max.
+- **Plan-then-prompt pattern.** User typically asks Claude to plan first in conversation, then writes detailed prompts to feed into Claude Code. The plan-then-prompt loop is intentional. Honor structured prompts literally; ask before improvising.
+- **dialed.gg minimalism over generic SaaS styling.** Push back if a request would compromise the aesthetic.
+- **All shake animations are translation only.** No rotation. Don't add it.
+- **"Don't improve unrelated things" rule.** When refactoring or modifying, user almost always wants behavior preserved exactly. Preserve names, comments, structure unless explicitly asked.
+- **`applyShake()` reflow trick** (`card.classList.remove('shake'); void card.offsetWidth; card.classList.add('shake');`) is required — without it CSS animations don't re-trigger when the class is added back. Don't "simplify" it away.
+- **Hot/cold color thresholds** live in `getCardColor()` and `getAccentTint()` in `script.js`, not in CSS. Edit them there.
+- **`original-backup.html`** is the pre-refactor single-file version. Gitignored. Kept locally so visual regressions can be diffed against the original. Safe to delete only after the current version has lived long enough to trust.
 
-### `original-backup.html`
+## User notes
 
-The single-file predecessor of the main app. Not loaded by anything; kept so you can diff visuals if a refactor regresses something. Safe to delete once the current multi-file version has lived long enough to trust.
-
-## `NumGSR/` subproject architecture
-
-Three files coupled by `id`:
-
-- `index.html` — thin stage. Every interactive element has an `id` that `game.js` looks up via `getElementById`. Renaming or removing an `id` without a matching JS edit breaks the game silently.
-- `scripts/game.js` — all state (`target`, `attempts`, `gameOver`) and all DOM updates. Module script. Random int 1–1000 rolled in `newGame()` on load and reset.
-- `styles/main.css` — purely presentational.
-
-**Heat thresholds** in `getHeat(diff)`: `0 → locked`, `1–3 → hot`, `4–15 → warm`, `16–50 → tracking`, `51–150 → searching`, `151+ → far`. The returned string is both a CSS hook and the text shown in `#heatLabel`.
-
-**Two subtle invariants in `submitGuess`:**
-
-1. `card.className = 'card ' + heat` REPLACES all classes on `#gameCard`. Any static class beyond `card` will be wiped on every guess. Layout classes belong on a parent, not on `#gameCard`.
-2. `.shake` is added AFTER the `className` reassignment. Reordering silently disables the animation (the `classList.add('shake')` gets wiped by the `className = ...` replacement).
-
-**Dead code preserved intentionally:** `card.style.borderColor` is still written on every guess, and `getBorderColor(diff)` exists to compute it. `.card` has no border in the current CSS, so both are no-ops. Left in place during the minimalist redesign to avoid touching `game.js`. Delete only if you're already modifying `game.js` for unrelated reasons.
-
-## Running
-
-No build step. Open the HTML directly in a browser, or serve locally:
-
-    npx serve .          # serves this folder (main app at /index.html)
-    npx serve NumGSR/    # serves the NumGSR subproject
-
-Do not suggest `npm run dev`, `npm run build`, or `npm run lint` — there is no `package.json`.
-
-## Copy voice
-
-All user-facing text is lowercase, dry, deadpan, short. No exclamation points, no emoji, no "nice!" / "great job!" / "awesome!". Error states are self-deprecating (`"1 to 1000. those are the rules."`), not alarming. When adding copy, match the existing strings — the error line, the intro (`"you have unlimited tries but your dignity is finite."`), and `HEAT_COPY` in NumGSR's `game.js`.
+(Nothing carried over from the prior CLAUDE.md — all content there was previously authored by Claude and is captured under the relevant new sections above.)
