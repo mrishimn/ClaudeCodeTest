@@ -18,6 +18,17 @@ const DIFFICULTY_COLORS = {
   brutal: { bg: '#8a3020', tint: '#d49888' },
 };
 const STORAGE_KEY = 'guessGameBestScores';
+const DAILY_STORAGE_KEY = 'guessGameDailyResults';
+// Fixed launch date for puzzle-number math (kept as a constant so the
+// share string is stable regardless of when this code is read).
+const DAILY_LAUNCH_DATE = '2026-04-01T00:00:00Z';
+// Daily mode is fixed-range, untimed.
+const DAILY_RANGE_MAX = 1000;
+// Daily palette: deep warm gold base + readable warm muted text.
+const DAILY_BG = '#4a3a1a';
+const DAILY_TINT = '#d4b87a';
+// Placeholder URL appended to the share string until the game is deployed.
+const DAILY_SHARE_URL = 'https://yourgame.com/';
 const TIMER_STEPS = [0, 15, 30, 45, 60, 90]; // index 0 = off; rest are seconds
 const DIFFICULTY_ORDER = ['easy', 'medium', 'hard', 'brutal'];
 // Human-readable label per internal key. Keeps display text decoupled from
@@ -41,6 +52,15 @@ let lowerBound = 1;
 let upperBound = 0;
 let timerIndex = 0;
 let bestScores = loadBestScores();
+
+// 'custom' = the original timer/switch flow. 'daily' = the date-seeded daily.
+let currentMode = 'custom';
+let dailyResults = loadDailyResults();
+// Interval handle for the "next puzzle in …" line on State C.
+let countdownIntervalId = 0;
+// Locked at round-start so a UTC midnight crossing during play still files
+// the completion under the day the round actually began.
+let dailyAttemptKey = '';
 
 // Timer (countdown) state
 let timerActive = false;
@@ -95,6 +115,21 @@ const rangeAlive     = document.getElementById('rangeAlive');
 const rangeTicks     = document.getElementById('rangeTicks');
 const rangeLabelLower = document.getElementById('rangeLabelLower');
 const rangeLabelUpper = document.getElementById('rangeLabelUpper');
+// Daily-mode DOM
+const dailyLink       = document.getElementById('dailyLink');
+const dailyBack       = document.getElementById('dailyBack');
+const dailyScreen     = document.getElementById('dailyScreen');
+const dailySubtext    = document.getElementById('dailySubtext');
+const dailyDate       = document.getElementById('dailyDate');
+const dailyResume     = document.getElementById('dailyResume');
+const dailyCountdown  = document.getElementById('dailyCountdown');
+const dailyGoBtn      = document.getElementById('dailyGoBtn');
+const shareWrap       = document.getElementById('shareWrap');
+const shareBtn        = document.getElementById('shareBtn');
+const shareToast      = document.getElementById('shareToast');
+const streakDisplay   = document.getElementById('streakDisplay');
+const streakCount     = document.getElementById('streakCount');
+const backToDailyLink = document.getElementById('backToDailyLink');
 
 // ── Helpers ────────────────────────────────────────
 
@@ -166,11 +201,12 @@ function currentTimerKey() {
 }
 
 // Pick the card background color for a given coldness value (0 = burning, 1 = freezing).
+// In daily mode the neutral tier reads gold instead of plain dark.
 function getCardColor(coldness) {
   if (coldness < 0.02) return '#c8341a';
   if (coldness < 0.08) return '#d9632a';
   if (coldness < 0.15) return '#a56b2e';
-  if (coldness < 0.30) return '#1a1a1a';
+  if (coldness < 0.30) return currentMode === 'daily' ? DAILY_BG : '#1a1a1a';
   if (coldness < 0.50) return '#1e3a5f';
   if (coldness < 0.75) return '#162a47';
   return '#0d1e38';
@@ -180,7 +216,7 @@ function getCardColor(coldness) {
 function getAccentTint(coldness) {
   if (coldness < 0.08) return '#e6a898';
   if (coldness < 0.15) return '#d4b896';
-  if (coldness < 0.30) return '#888888';
+  if (coldness < 0.30) return currentMode === 'daily' ? DAILY_TINT : '#888888';
   if (coldness < 0.50) return '#8ba3c4';
   if (coldness < 0.75) return '#7a95bf';
   return '#6889b8';
@@ -307,6 +343,377 @@ function applyShake() {
   card.classList.add('shake');
 }
 
+// ── Daily-mode helpers ─────────────────────────────
+
+// Today's date as a YYYY-MM-DD string in UTC.
+function getTodayUTC() {
+  const now = new Date();
+  const y = now.getUTCFullYear();
+  const m = String(now.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(now.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+// Format any Date as the same UTC YYYY-MM-DD key shape.
+function formatUTCDateKey(d) {
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+// cyrb53 — small, well-known string hash → 32-bit int.
+function cyrb53(str, seed = 0) {
+  let h1 = 0xdeadbeef ^ seed, h2 = 0x41c6ce57 ^ seed;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return 4294967296 * (2097151 & h2) + (h1 >>> 0);
+}
+
+// mulberry32 — tiny seeded PRNG returning a function that yields [0, 1).
+function mulberry32(seed) {
+  return function() {
+    let t = seed += 0x6D2B79F5;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// Today's daily target (1–1000), purely date-seeded — every device gets the same number.
+function getDailyTarget() {
+  const seed = cyrb53(getTodayUTC());
+  const rng = mulberry32(seed);
+  return Math.floor(rng() * DAILY_RANGE_MAX) + 1;
+}
+
+// Days since the fixed launch date, +1 → "Daily #N" for the share string.
+function getDailyPuzzleNumber() {
+  const launch = new Date(DAILY_LAUNCH_DATE);
+  const now = new Date(getTodayUTC() + 'T00:00:00Z');
+  return Math.floor((now - launch) / 86400000) + 1;
+}
+
+// Read the daily-results map from localStorage, or {} if missing/corrupt.
+function loadDailyResults() {
+  const raw = localStorage.getItem(DAILY_STORAGE_KEY);
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return (parsed && typeof parsed === 'object') ? parsed : {};
+  } catch (e) {
+    return {};
+  }
+}
+
+// Persist the daily-results map.
+function saveDailyResults() {
+  localStorage.setItem(DAILY_STORAGE_KEY, JSON.stringify(dailyResults));
+}
+
+// Count consecutive completed days ending today or yesterday.
+// If today's done it counts; if not, yesterday is the streak end (so the
+// player still has today to extend it).
+function getStreak() {
+  const todayKey = getTodayUTC();
+  const today = new Date(todayKey + 'T00:00:00Z');
+  const todayResult = dailyResults[todayKey];
+
+  let cursor = today;
+  if (!todayResult || !todayResult.completed) {
+    cursor = new Date(today.getTime() - 86400000);
+  }
+
+  let streak = 0;
+  while (true) {
+    const key = formatUTCDateKey(cursor);
+    const r = dailyResults[key];
+    if (r && r.completed) {
+      streak++;
+      cursor = new Date(cursor.getTime() - 86400000);
+    } else {
+      break;
+    }
+  }
+  return streak;
+}
+
+// "april 27, 2026 · #127" — UTC, lowercase, matches house style.
+function formatDailyDateLine() {
+  const months = ['january','february','march','april','may','june','july','august','september','october','november','december'];
+  const now = new Date();
+  const m = months[now.getUTCMonth()];
+  const d = now.getUTCDate();
+  const y = now.getUTCFullYear();
+  return `${m} ${d}, ${y} · #${getDailyPuzzleNumber()}`;
+}
+
+// Time until the next UTC midnight, formatted "next puzzle in Xh Ym".
+function formatNextPuzzleCountdown() {
+  const now = new Date();
+  const tomorrow = new Date(Date.UTC(
+    now.getUTCFullYear(),
+    now.getUTCMonth(),
+    now.getUTCDate() + 1,
+    0, 0, 0, 0,
+  ));
+  const ms = Math.max(0, tomorrow - now);
+  const h = Math.floor(ms / 3600000);
+  const m = Math.floor((ms % 3600000) / 60000);
+  return `next puzzle in ${h}h ${m}m`;
+}
+
+// Show/hide the streak block; only renders when streak >= 1.
+function renderStreak() {
+  const s = getStreak();
+  if (s < 1) {
+    streakDisplay.hidden = true;
+    return;
+  }
+  streakCount.textContent = String(s);
+  streakDisplay.hidden = false;
+}
+
+// Stop the State-C "next puzzle in …" updater.
+function stopCountdown() {
+  if (countdownIntervalId) {
+    clearInterval(countdownIntervalId);
+    countdownIntervalId = 0;
+  }
+}
+
+// Decide which of A/B/C the daily intro should show, then paint it.
+// A — no attempt yet. B — partial attempt to resume. C — already won today.
+function renderDailyIntro() {
+  stopCountdown();
+  dailyDate.textContent = formatDailyDateLine();
+  renderStreak();
+
+  const todayKey = getTodayUTC();
+  const r = dailyResults[todayKey];
+  const isCompleted = !!(r && r.completed);
+  const isInProgress = !!(r && !r.completed && r.history && r.history.length > 0);
+
+  if (isCompleted) {
+    // STATE C — already solved today.
+    const tries = r.guesses;
+    dailySubtext.textContent =
+      'you solved it in ' + tries + (tries === 1 ? ' guess today. come back tomorrow.' : ' guesses today. come back tomorrow.');
+    dailyResume.hidden = true;
+    dailyCountdown.textContent = formatNextPuzzleCountdown();
+    dailyCountdown.hidden = false;
+    dailyGoBtn.hidden = true;
+    shareWrap.hidden = false;
+    shareBtn.textContent = 'share';
+    shareBtn.classList.remove('flashing');
+    shareToast.classList.remove('show');
+    // Refresh the countdown line every 60s while State C is visible.
+    countdownIntervalId = setInterval(() => {
+      if (!dailyScreen.hidden && !dailyCountdown.hidden) {
+        dailyCountdown.textContent = formatNextPuzzleCountdown();
+      }
+    }, 60000);
+  } else if (isInProgress) {
+    // STATE B — abandoned mid-attempt; offer to resume.
+    dailySubtext.textContent = 'everyone gets the same number today. how fast can you find it?';
+    dailyResume.hidden = false;
+    dailyCountdown.hidden = true;
+    dailyGoBtn.hidden = false;
+    shareWrap.hidden = true;
+  } else {
+    // STATE A — fresh.
+    dailySubtext.textContent = 'everyone gets the same number today. how fast can you find it?';
+    dailyResume.hidden = true;
+    dailyCountdown.hidden = true;
+    dailyGoBtn.hidden = false;
+    shareWrap.hidden = true;
+  }
+}
+
+// Switch the card from custom start screen → daily intro screen.
+function goToDailyIntro() {
+  stopTimer();
+  currentMode = 'daily';
+  // Daily palette as the base while on the intro card.
+  setCardColors(DAILY_BG, DAILY_TINT);
+  card.classList.remove('shake');
+  card.removeAttribute('data-effect');
+
+  // Corner widget: only the back link is visible on this screen.
+  dailyLink.hidden = true;
+  dailyBack.hidden = false;
+  cornerMark.hidden = true;
+  timerDisplay.hidden = true;
+
+  startScreen.hidden = true;
+  gameScreen.hidden = true;
+  dailyScreen.hidden = false;
+
+  renderDailyIntro();
+}
+
+// Begin a daily round. resume=true rebuilds state from the saved partial attempt.
+function startDailyGame(resume) {
+  stopTimer();
+  stopCountdown();
+  currentMode = 'daily';
+  rangeMax = DAILY_RANGE_MAX;
+
+  // Capture today's key once; re-used for every persist call this round so
+  // a midnight rollover doesn't accidentally re-key the completion.
+  dailyAttemptKey = getTodayUTC();
+
+  if (resume) {
+    const r = dailyResults[dailyAttemptKey];
+    target = r.target;
+    guesses = (r.history || []).slice();
+    lowerBound = 1;
+    upperBound = rangeMax;
+    for (const g of guesses) {
+      if (g.word === 'higher') lowerBound = Math.max(lowerBound, g.n);
+      if (g.word === 'lower')  upperBound = Math.min(upperBound, g.n);
+    }
+  } else {
+    target = getDailyTarget();
+    guesses = [];
+    lowerBound = 1;
+    upperBound = rangeMax;
+    // Open the day's record so an early bail-out still leaves a resume point.
+    dailyResults[dailyAttemptKey] = {
+      guesses: null,
+      completed: false,
+      target: target,
+      history: [],
+      startedAt: new Date().toISOString(),
+    };
+    saveDailyResults();
+  }
+
+  // Gold base for daily; will shift via getCardColor/getAccentTint on hot/cold.
+  setCardColors(DAILY_BG, DAILY_TINT);
+  card.classList.remove('shake');
+  card.removeAttribute('data-effect');
+
+  errorEl.textContent = '';
+  winSubtext.textContent = '';
+  timeSpare.textContent = '';
+  newBest.hidden = true;
+  timeSpare.hidden = true;
+  introRange.textContent = "i'm thinking of a number between 1 and " + rangeMax + '.';
+  prompt.hidden = false;
+  form.hidden = false;
+  playAgainBtn.hidden = true;
+  backToDailyLink.hidden = true;
+  input.disabled = false;
+  input.value = '';
+  input.placeholder = '1–' + rangeMax;
+
+  resetRangeBar();
+
+  if (guesses.length === 0) {
+    headline.textContent = 'number';
+    intro.hidden = false;
+    historyEl.hidden = true;
+    historyEl.innerHTML = '';
+    resetBtn.hidden = true;
+  } else {
+    // Resuming — replay the visible state from history.
+    const last = guesses[guesses.length - 1];
+    headline.textContent = last.word;
+    intro.hidden = true;
+    renderHistory();
+    resetBtn.hidden = false;
+
+    // Repaint range-bar ticks + alive zone + labels.
+    for (const g of guesses) {
+      const tick = document.createElement('div');
+      tick.className = 'range-tick';
+      tick.style.left = pctFor(g.n) + '%';
+      rangeTicks.appendChild(tick);
+    }
+    const lowerPct = pctFor(lowerBound);
+    const upperPct = pctFor(upperBound);
+    rangeAlive.style.left = lowerPct + '%';
+    rangeAlive.style.right = (100 - upperPct) + '%';
+    rangeLabelLower.style.right = (100 - lowerPct) + '%';
+    rangeLabelUpper.style.left = upperPct + '%';
+    rangeLabelLower.textContent = String(lowerBound);
+    rangeLabelUpper.textContent = String(upperBound);
+
+    // Hot/cold tint based on the most recent guess (mode-aware automatically).
+    const distance = Math.abs(last.n - target);
+    const coldness = distance / rangeMax;
+    setCardColors(getCardColor(coldness), getAccentTint(coldness));
+  }
+
+  // No daily timer; no daily back-link visible during play.
+  dailyLink.hidden = true;
+  dailyBack.hidden = true;
+  cornerMark.hidden = true;
+  timerDisplay.hidden = true;
+
+  dailyScreen.hidden = true;
+  startScreen.hidden = true;
+  gameScreen.hidden = false;
+  input.focus();
+}
+
+// Persist the in-progress (or just-completed) daily state after each guess,
+// keyed to the day the round started (NOT today, in case midnight crossed).
+function persistDailyProgress(won) {
+  const key = dailyAttemptKey || getTodayUTC();
+  const existing = dailyResults[key] || {};
+  dailyResults[key] = {
+    guesses: won ? guesses.length : null,
+    completed: !!won,
+    target: target,
+    history: guesses.slice(),
+    startedAt: existing.startedAt || new Date().toISOString(),
+  };
+  saveDailyResults();
+}
+
+// Build today's share string. Singular "guess" if it took exactly 1 try.
+function buildShareString(puzzleNum, guessCount) {
+  const noun = guessCount === 1 ? 'guess' : 'guesses';
+  return `i solved daily #${puzzleNum} in ${guessCount} ${noun}. play at ${DAILY_SHARE_URL}`;
+}
+
+// Copy today's share string and fire the three feedback signals in parallel:
+// label swap, button flash, floating toast.
+async function copyShareString() {
+  const todayKey = getTodayUTC();
+  const r = dailyResults[todayKey];
+  if (!r || !r.completed) return;
+  const str = buildShareString(getDailyPuzzleNumber(), r.guesses);
+  try {
+    await navigator.clipboard.writeText(str);
+  } catch (e) {
+    // Clipboard unavailable (e.g. insecure context). Fail silently per project style.
+    return;
+  }
+
+  // Label swap: hold "copied" for 1.8s before reverting.
+  shareBtn.textContent = 'copied';
+  setTimeout(() => { shareBtn.textContent = 'share'; }, 1800);
+
+  // Background flash: brief gold hold + fade back to white. Reflow trick so
+  // rapid clicks restart the animation instead of swallowing it.
+  shareBtn.classList.remove('flashing');
+  void shareBtn.offsetWidth;
+  shareBtn.classList.add('flashing');
+  setTimeout(() => shareBtn.classList.remove('flashing'), 600);
+
+  // Toast: 200ms fade-in (via .show), 1.5s hold, 400ms fade-out (default rule).
+  shareToast.classList.add('show');
+  setTimeout(() => shareToast.classList.remove('show'), 1700);
+}
+
 // ── Range-narrowing bar ────────────────────────────
 
 // Reset alive zone to full width; clear past ticks and reset labels.
@@ -398,6 +805,8 @@ function stopTimer() {
 // The difficulty switch always has a position; reload it from session.
 function goToStartScreen() {
   stopTimer();
+  stopCountdown();
+  currentMode = 'custom';
   currentDifficulty = loadSwitchDifficulty();
   rangeMax = 0;
   target = 0;
@@ -437,12 +846,22 @@ function goToStartScreen() {
 
   renderDifficultySwitch();
   renderBestSingle();
+
+  // Corner widgets: daily link is the start-screen entry point; cornerMark stays
+  // reserved for the (custom, untimed) game screen via stopTimer/startTimer.
+  dailyLink.hidden = false;
+  dailyBack.hidden = true;
+  backToDailyLink.hidden = true;
+  cornerMark.hidden = true;
+
+  dailyScreen.hidden = true;
   gameScreen.hidden = true;
   startScreen.hidden = false;
 }
 
 // Start a fresh round at the switch's current difficulty, optionally with a countdown.
 function startGame() {
+  currentMode = 'custom';
   rangeMax = DIFFICULTIES[currentDifficulty].max;
   target = Math.floor(Math.random() * rangeMax) + 1;
   guesses = [];
@@ -473,12 +892,23 @@ function startGame() {
 
   resetRangeBar();
 
+  // Hide daily-only corner widgets while a custom round is active.
+  dailyLink.hidden = true;
+  dailyBack.hidden = true;
+  backToDailyLink.hidden = true;
+  dailyScreen.hidden = true;
+
   startScreen.hidden = true;
   gameScreen.hidden = false;
   input.focus();
 
+  // Custom-mode untimed: show the decorative corner mark; timed: startTimer takes over.
   const seconds = TIMER_STEPS[timerIndex];
-  if (seconds > 0) startTimer(seconds);
+  if (seconds > 0) {
+    startTimer(seconds);
+  } else {
+    cornerMark.hidden = false;
+  }
 }
 
 // Redraw the last 5 guesses, newest first.
@@ -494,6 +924,8 @@ function renderHistory() {
 }
 
 // Swap the card into its victory state; record best and show time-to-spare if timed.
+// In daily mode, skip best-score work and surface a "back to daily" link in
+// place of the play-again button.
 function win() {
   const count = guesses.length;
 
@@ -504,6 +936,28 @@ function win() {
     spareSec = Math.floor(remaining / 1000);
   }
   stopTimer();
+
+  if (currentMode === 'daily') {
+    headline.textContent = 'got it';
+    winSubtext.textContent = 'the number was ' + target + '. solved in ' + count + (count === 1 ? ' try.' : ' tries.');
+    winSubtext.hidden = false;
+    timeSpare.hidden = true;
+    newBest.hidden = true;
+
+    setCardColors('#1a3d2a', '#a6c7ad');
+
+    intro.hidden = true;
+    historyEl.hidden = true;
+    prompt.hidden = true;
+    form.hidden = true;
+    resetBtn.hidden = true;
+    playAgainBtn.hidden = true;
+    backToDailyLink.hidden = false;
+    cornerMark.hidden = true;
+    input.disabled = true;
+    backToDailyLink.focus();
+    return;
+  }
 
   const tk = currentTimerKey();
   const prevBest = bestScores[currentDifficulty][tk];
@@ -585,6 +1039,9 @@ function handleGuess(e) {
   renderHistory();
   resetBtn.hidden = false;
 
+  // Daily mode: persist after every guess so the player can resume after a refresh.
+  if (currentMode === 'daily') persistDailyProgress(word === 'got it');
+
   // Update the "still alive" bounds based on the guess direction.
   if (word === 'higher') lowerBound = Math.max(lowerBound, n);
   if (word === 'lower')  upperBound = Math.min(upperBound, n);
@@ -622,12 +1079,16 @@ function hideResetConfirm() {
   resetConfirm.hidden = true;
 }
 
-// Wipe every stored best (all 24 slots) and refresh the start-screen if visible.
+// Wipe every stored best (all 24 slots) AND every daily result, then refresh
+// whichever screen is visible.
 function doResetScores() {
   bestScores = makeEmptyScores();
   localStorage.removeItem(STORAGE_KEY);
+  dailyResults = {};
+  localStorage.removeItem(DAILY_STORAGE_KEY);
   hideResetConfirm();
   if (!startScreen.hidden) renderBestSingle();
+  if (!dailyScreen.hidden) renderDailyIntro();
 }
 
 // ── Timer slider ───────────────────────────────────
@@ -735,6 +1196,18 @@ confirmNo.addEventListener('click', hideResetConfirm);
 timerHandle.addEventListener('pointerdown', onHandlePointerDown);
 timerHandle.addEventListener('keydown', onHandleKeyDown);
 timerSlider.addEventListener('click', onSliderClick);
+
+// Daily-mode wiring.
+dailyLink.addEventListener('click', goToDailyIntro);
+dailyBack.addEventListener('click', goToStartScreen);
+// "go" on the daily intro: resume if there's a partial attempt, else fresh start.
+dailyGoBtn.addEventListener('click', () => {
+  const r = dailyResults[getTodayUTC()];
+  const resume = !!(r && !r.completed && r.history && r.history.length > 0);
+  startDailyGame(resume);
+});
+shareBtn.addEventListener('click', copyShareString);
+backToDailyLink.addEventListener('click', goToDailyIntro);
 
 // Escape aborts an active round (not during win/timeout, where the form is hidden).
 document.addEventListener('keydown', (e) => {
